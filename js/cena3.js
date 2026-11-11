@@ -1,442 +1,211 @@
-const CHAVE_ESTADO = 'cozinha_estado';
-const DURACAO = 15 * 60;
-const SENHA_SEGURANCA = '10';
-const SENHA_CAIXA = '6075';
-const EMULSAO = { meta: 10, largura: 24, graca: 1 };
+'use strict';
 
-const ITENS = {
-  chave:       { nome: 'Chave de Fenda de Confeiteiro', icone: '🪛', desc: 'Clique no painel do termostato para abri-lo.' },
-  mapa:        { nome: 'Mapa do Restaurante', icone: '🗺️', desc: 'Mostra o caminho entre as cozinhas. Clique de novo para abrir.' },
-  baunilha:    { nome: 'Extrato de Baunilha Rara', icone: '🌿', desc: 'Ingrediente obrigatório para a nota máxima no prato final.' },
-  termometro:  { nome: 'Termômetro Digital', icone: '🌡️', desc: 'Leve para a Confeitaria e use no frasco de calda.' },
-  yuzu:        { nome: 'Fruta de Yuzu Congelada', icone: '🍋', desc: 'Leve para a Confeitaria e deixe descongelar no mármore frio.' },
-  merengue:    { nome: 'Merengue Assado', icone: '🍥', desc: 'Assado no ponto exato. Será usado no prato final.' },
-  calda:       { nome: 'Calda no Ponto', icone: '🍯', desc: 'Calda de açúcar no ponto de bola mole, 118 °C.' }
-};
+(() => {
+  const CENA = Number(location.pathname.match(/cena(\d+)/)?.[1] ?? 0);
+  const IMG = '../img/daniela.png';
+  const $d = (seletor) => document.querySelector(seletor);
+  const jaAvisou = new Set();
 
-const PADRAO = {
-  fim: Date.now() + DURACAO * 1000,
-  inventario: [],
-  erros: 0,
-  acertos: 0,
-  chavePega: false,
-  mapaPego: false,
-  potesAbertos: false,
-  portaAberta: false,
-  fornoEtapa: 0,
-  assadoEm: 0,
-  merengue: false,
-  caldaPronta: false,
-  yuzuUsado: false,
-  termostatoAberto: false,
-  caixaAberta: false,
-  segurancaAberta: false,
-  emulsaoPronta: false
-};
-function carregarEstado() {
-  try { return JSON.parse(sessionStorage.getItem(CHAVE_ESTADO)); } catch (e) { return null; }
-}
-let estado = Object.assign({}, PADRAO, carregarEstado() || {});
-function salvar() {
-  try { sessionStorage.setItem(CHAVE_ESTADO, JSON.stringify(estado)); } catch (e) {}
-}
-salvar();
+  const INTRO = [
+    'Oi! Eu sou a Daniela, a ratinha-chef desta cozinha. Você acordou trancado na despensa, e eu vou te ajudar a sair.',
+    'Clique nos objetos do cenário para inspecionar. Alguns guardam pistas, outros guardam itens, e muitos são só enfeite.',
+    'Tudo que você pegar vai para o inventário, na barra lá embaixo. Clique no item para selecioná-lo e depois clique no objeto onde quer usá-lo.',
+    'Você tem 15 minutos. Primeiro objetivo: achar a senha da porta e o mapa do restaurante. E pegue tudo o que puder antes de sair, que eu vou te avisar se esquecer algo! Se precisar de uma dica, clique em DICA, mas ela custa 1 minuto.',
+  ];
 
-const $ = s => document.querySelector(s);
-const overlay = $('#modal-overlay');
-const modalTitulo = $('#modal-titulo');
-const modalCorpo = $('#modal-corpo');
-let travado = false;
-let selecionado = null;
-let aoFechar = null;
+  const LEMBRETE_DICA = 'Lembrete: se precisar de ajuda, clique em DICA no canto da tela. Cada dica custa 1 minuto do seu tempo.';
 
-function fala(texto) { $('#mensagem').textContent = texto; }
-
-function abrirModal(titulo, html) {
-  if (aoFechar) { aoFechar(); aoFechar = null; }
-  modalTitulo.textContent = titulo;
-  modalCorpo.innerHTML = html;
-  overlay.hidden = false;
-}
-function fecharModal() {
-  if (travado) return;
-  if (aoFechar) { aoFechar(); aoFechar = null; }
-  overlay.hidden = true;
-  modalCorpo.innerHTML = '';
-}
-$('#modal-fechar').addEventListener('click', fecharModal);
-overlay.addEventListener('click', e => { if (e.target === overlay) fecharModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') fecharModal();
-  if ((e.key === 'h' || e.key === 'H') && overlay.hidden) $('#cena').classList.toggle('debug');
-});
-
-function renderInventario() {
-  const barra = $('#inventory-bar');
-  barra.innerHTML = '';
-  for (let i = 0; i < 8; i++) {
-    const id = estado.inventario[i];
-    if (id && ITENS[id]) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'slot cheio' + (selecionado === id ? ' ativo' : '');
-      b.title = ITENS[id].nome;
-      b.setAttribute('aria-label', ITENS[id].nome);
-      b.textContent = ITENS[id].icone;
-      b.addEventListener('click', () => clicarItem(id));
-      barra.appendChild(b);
-    } else {
-      const d = document.createElement('div');
-      d.className = 'slot';
-      barra.appendChild(d);
-    }
-  }
-}
-function addItem(id) {
-  if (!estado.inventario.includes(id)) estado.inventario.push(id);
-  salvar();
-  renderInventario();
-}
-function removerItem(id) {
-  estado.inventario = estado.inventario.filter(i => i !== id);
-  salvar();
-  renderInventario();
-}
-function clicarItem(id) {
-  if (id === 'mapa') {
-    selecionado = null;
-    renderInventario();
-    abrirMapa();
-    return;
-  }
-  if (selecionado === id) {
-    selecionado = null;
-    fala('Item guardado.');
-  } else {
-    selecionado = id;
-    fala(ITENS[id].nome + ': ' + ITENS[id].desc);
-  }
-  renderInventario();
-}
-function ligar(id, alvo, fn, usos) {
-  $(id).addEventListener('click', () => {
-    if (selecionado) {
-      if (usos && usos[selecionado]) { usos[selecionado](); return; }
-      fala(ITENS[selecionado].nome + ' não funciona em: ' + alvo + '. Clique no item de novo para guardá-lo.');
-      return;
-    }
-    fn();
-  });
-}
-
-function abrirMapa() {
-  abrirModal('Mapa do Restaurante', `
-    <div class="mapa">
-      <div class="sala">1 · Despensa</div>
-      <div class="sala">2 · Confeitaria e Fornos</div>
-      <div class="sala atual">3 · Câmara Fria<br>(você está aqui)</div>
-      <div class="sala">4 · Escritório do Chef</div>
-      <div class="sala">5 · Pista Principal</div>
-    </div>
-    <p class="dica-modal">A porta de metal do freezer leva ao Escritório do Chef.</p>
-  `);
-}
-
-function painelNumerico(titulo, intro, tam, completo, checar, sucesso, dica) {
-  let codigo = '';
-  abrirModal(titulo, `
-    <p>${intro}</p>
-    <div class="visor" id="visor">${'-'.repeat(tam)}</div>
-    <div class="teclado">
-      ${[1,2,3,4,5,6,7,8,9].map(d => `<button type="button" data-n="${d}">${d}</button>`).join('')}
-      <button type="button" data-a="limpar">C</button>
-      <button type="button" data-n="0">0</button>
-      <button type="button" data-a="ok">OK</button>
-    </div>
-    ${dica ? `<p class="dica-modal">${dica}</p>` : ''}
-  `);
-  const visor = $('#visor');
-  const atualizar = () => { visor.textContent = (codigo + '-'.repeat(tam)).slice(0, tam); };
-  modalCorpo.querySelector('.teclado').addEventListener('click', ev => {
-    const b = ev.target.closest('button');
-    if (!b) return;
-    if (b.dataset.n !== undefined) {
-      if (codigo.length < tam) { codigo += b.dataset.n; atualizar(); }
-    } else if (b.dataset.a === 'limpar') {
-      codigo = '';
-      atualizar();
-    } else if (b.dataset.a === 'ok') {
-      if (completo ? codigo.length !== tam : codigo.length === 0) return;
-      if (checar(codigo)) {
-        sucesso();
-      } else {
-        estado.erros++;
-        salvar();
-        codigo = '';
-        visor.classList.add('erro');
-        visor.textContent = 'ERRO';
-        setTimeout(() => { visor.classList.remove('erro'); atualizar(); }, 800);
-      }
-    }
-  });
-}
-
-function abrirPoster() {
-  abrirModal('Enigma das densidades', `
-    <div class="papel">
-      <p><strong>ENIGMA DAS DENSIDADES · Freezer</strong></p>
-      <p>Massa (g) = Volume (mL) × Densidade (g/cm³).<br>Lembre: 1 cm³ = 1 mL.</p>
-      <p><strong>Trava do freezer de frutas:</strong> massa do Recipiente #3 e massa do Recipiente #11, em gramas, nessa ordem, com 2 dígitos cada.</p>
-      <p><strong>Bloqueio de segurança da porta:</strong> o freezer de conservação marca <strong>14 °F</strong>. Digite em °C, sem o sinal de menos.</p>
-      <p>°C = (°F − 32) ÷ 1,8</p>
-    </div>
-  `);
-}
-
-function abrirRecipiente(numero) {
-  const dados = numero === 3
-    ? { conteudo: 'Calda de yuzu', dens: '1,2', vol: '50' }
-    : { conteudo: 'Gelificante', dens: '1,5', vol: '50' };
-  abrirModal('Recipiente #' + numero, `
-    <div class="papel">
-      <p><strong>RECIPIENTE #${numero}</strong></p>
-      <p>Conteúdo: ${dados.conteudo}<br>Densidade: ${dados.dens} g/cm³<br>Volume: ${dados.vol} mL</p>
-    </div>
-    <p class="dica-modal">Massa = volume × densidade.</p>
-  `);
-}
-
-function abrirSeguranca() {
-  if (estado.segurancaAberta) {
-    fala('O bloqueio de segurança já está liberado. A luz do teclado está verde.');
-    return;
-  }
-  painelNumerico(
-    'Bloqueio de segurança',
-    'Digite a temperatura do freezer em °C (o visor mostra 14 °F).',
-    3, false,
-    c => c === SENHA_SEGURANCA,
-    () => {
-      estado.segurancaAberta = true;
-      estado.acertos++;
-      salvar();
-      $('#no-teclado').classList.add('aberta');
-      fecharModal();
-      fala('Bip! A luz do teclado ficou verde. A porta do freezer está liberada.');
-    },
-    'Dica: o cartaz da parede explica como converter °F em °C.'
-  );
-}
-
-function abrirCaixa() {
-  if (estado.caixaAberta) {
-    fala('O freezer de frutas está vazio. Você já pegou o yuzu.');
-    return;
-  }
-  painelNumerico(
-    'Freezer de frutas raras',
-    'Trava de balança de precisão. Digite 4 dígitos: a massa (g) do Recipiente #3 e a do Recipiente #11.',
-    4, true,
-    c => c === SENHA_CAIXA,
-    () => {
-      estado.caixaAberta = true;
-      estado.acertos++;
-      salvar();
-      addItem('yuzu');
-      $('#no-caixa').classList.add('aberta');
-      fecharModal();
-      fala('Clique! O freezer abriu e você pegou a Fruta de Yuzu Congelada. Ela precisa descongelar na Confeitaria.');
-    },
-    'Dica: leia as etiquetas dos recipientes e use a fórmula do cartaz.'
-  );
-}
-
-function abrirMisturador() {
-  if (estado.emulsaoPronta) {
-    fala('O creme já está em emulsão perfeita, guardado para o prato final.');
-    return;
-  }
-  selecionado = null;
-  renderInventario();
-  abrirModal('Misturador de emulsão', `
-    <p>Mantenha o indicador dentro da zona verde por <strong>${EMULSAO.meta} segundos</strong> sem deixar o creme cortar.</p>
-    <div class="trilho" id="trilho">
-      <div class="zona-em" id="zona-em"></div>
-      <div class="marca" id="marca"></div>
-    </div>
-    <div class="progresso"><div class="progresso-barra" id="prog"></div></div>
-    <div class="leitura" id="leitura-em">0.0 / ${EMULSAO.meta} s</div>
-    <button type="button" class="btn-pixel" id="comecar">COMEÇAR</button>
-    <p class="dica-modal" id="em-msg">Mova o mouse (ou o dedo) sobre a barra. Também funciona com as setas ← e →.</p>
-  `);
-  const trilho = $('#trilho');
-  const zonaEl = $('#zona-em');
-  const marca = $('#marca');
-  const prog = $('#prog');
-  const leit = $('#leitura-em');
-  const msg = $('#em-msg');
-  const btn = $('#comecar');
-  let pos = 50, centro = 50, dentro = 0, fora = 0, raf = 0, ultimo = 0, t0 = 0;
-
-  const desenhar = () => {
-    zonaEl.style.left = (centro - EMULSAO.largura / 2) + '%';
-    zonaEl.style.width = EMULSAO.largura + '%';
-    marca.style.left = pos + '%';
-    prog.style.width = Math.min(100, (dentro / EMULSAO.meta) * 100) + '%';
-    leit.textContent = Math.min(dentro, EMULSAO.meta).toFixed(1) + ' / ' + EMULSAO.meta + ' s';
-  };
-  const moverPara = x => {
-    const r = trilho.getBoundingClientRect();
-    pos = Math.max(0, Math.min(100, ((x - r.left) / r.width) * 100));
-  };
-  trilho.addEventListener('pointermove', e => moverPara(e.clientX));
-  trilho.addEventListener('pointerdown', e => moverPara(e.clientX));
-  const teclas = e => {
-    if (e.key === 'ArrowLeft') { pos = Math.max(0, pos - 4); e.preventDefault(); }
-    if (e.key === 'ArrowRight') { pos = Math.min(100, pos + 4); e.preventDefault(); }
-  };
-  document.addEventListener('keydown', teclas);
-  aoFechar = () => {
-    cancelAnimationFrame(raf);
-    document.removeEventListener('keydown', teclas);
+  const BOAS_VINDAS = {
+    2: [
+      'Estamos na Confeitaria! A porta da Câmara Fria só abre depois que o merengue sair do forno.',
+      LEMBRETE_DICA,
+    ],
+    3: [
+      'Brrr, a Câmara Fria! Aqui estão duas coisas de que a Confeitaria precisa: um termômetro e a fruta de yuzu congelada. Leve os dois para lá e depois volte.',
+      LEMBRETE_DICA,
+    ],
+    4: [
+      'O Escritório do Chef! A chave mestra e o armário de especiarias são o caminho da saída.',
+      LEMBRETE_DICA,
+    ],
   };
 
-  const quadro = agora => {
-    const dt = Math.min(0.1, (agora - ultimo) / 1000);
-    ultimo = agora;
-    const t = (agora - t0) / 1000;
-    centro = 50 + 30 * Math.sin(t * 0.8) + 8 * Math.sin(t * 2.1);
-    centro = Math.max(EMULSAO.largura / 2, Math.min(100 - EMULSAO.largura / 2, centro));
-    if (Math.abs(pos - centro) <= EMULSAO.largura / 2) {
-      dentro += dt;
-      fora = 0;
-    } else {
-      fora += dt;
-    }
-    desenhar();
-    if (dentro >= EMULSAO.meta) {
-      estado.emulsaoPronta = true;
-      estado.acertos++;
-      salvar();
-      fecharModal();
-      fala('Perfeito! A emulsão ficou lisa e brilhante, sem cortar. O creme está pronto para o prato final.');
-      return;
-    }
-    if (fora > EMULSAO.graca) {
-      estado.erros++;
-      salvar();
-      msg.textContent = 'O creme cortou! Fique dentro da zona verde. Tente de novo.';
-      btn.textContent = 'TENTAR DE NOVO';
-      btn.hidden = false;
-      return;
-    }
-    raf = requestAnimationFrame(quadro);
+  const BAUNILHA = ['o Extrato de Baunilha Rara', 'fica nos potes trancados da Despensa e sem ele não dá para tirar a nota máxima'];
+
+  const FALTAS = {
+    1: () => [
+      !estado.chavePega && ['a Chave de Fenda de Confeiteiro', 'ela está escondida nos sacos de farinha'],
+      !estado.potesAbertos && BAUNILHA,
+    ],
+    3: () => [
+      !estado.emulsaoPronta && ['o creme em emulsão', 'faça no misturador de emulsão, porque ele será usado no prato final'],
+    ],
+    4: () => [
+      !estado.potesAbertos && BAUNILHA,
+      !estado.inventario.includes('especiarias') && ['as Especiarias Raras', 'ficam dentro do armário de especiarias'],
+    ],
   };
-  btn.addEventListener('click', () => {
-    dentro = 0;
-    fora = 0;
-    btn.hidden = true;
-    msg.textContent = 'Siga a zona verde com o indicador vermelho!';
-    t0 = performance.now();
-    ultimo = t0;
-    raf = requestAnimationFrame(quadro);
-  });
-  desenhar();
-}
 
-function usarChaveNoTermostato() {
-  if (estado.termostatoAberto) {
-    fala('O painel já está aberto.');
-    return;
-  }
-  estado.termostatoAberto = true;
-  salvar();
-  removerItem('chave');
-  selecionado = null;
-  addItem('termometro');
-  renderInventario();
-  fala('Você soltou os parafusos e achou um Termômetro Digital escondido atrás do painel. Leve-o para a Confeitaria.');
-}
-function abrirTermostato() {
-  if (estado.termostatoAberto) {
-    fala('O painel do termostato está aberto e vazio.');
-  } else if (estado.inventario.includes('chave')) {
-    usarChaveNoTermostato();
-  } else {
-    fala('Um painel de termostato preso por parafusos. Falta uma ferramenta para abrir. A chave de fenda está na Despensa.');
-  }
-}
+  const faltas = () => (FALTAS[CENA]?.() ?? []).filter(Boolean);
 
-function abrirPorta() {
-  if (!estado.segurancaAberta) {
-    abrirSeguranca();
-    return;
-  }
-  const falta = [];
-  if (!estado.caldaPronta) falta.push('a calda no ponto (use o termômetro no frasco da Confeitaria)');
-  if (!estado.yuzuUsado) falta.push('o yuzu descongelando no mármore da Confeitaria');
-  if (falta.length) {
-    abrirModal('Porta do freezer', `
-      <div class="papel">
-        <p>Um bilhete do Chef está preso na porta:</p>
-        <p>"Só passa quem já preparou tudo na Confeitaria."</p>
-        <p>Ainda falta: ${falta.join(' e ')}.</p>
+  const dicaAtual = () => {
+    const e = estado;
+    const dicas = {
+      1: [
+        [!e.portaAberta, 'O bilhete rasgado na parede tem duas contas, uma de farinha e uma de temperatura. A senha é as duas respostas juntas.'],
+        [!e.mapaPego, 'Tem um papel dobrado dentro do caixote. Pode ser o mapa do restaurante.'],
+        [!e.chavePega, 'Já mexeu nos sacos de farinha? Às vezes tem algo escondido.'],
+        [!e.potesAbertos, 'Os potes trancados pedem uma ordem, do mais suave ao mais forte. O diário do caixote pode ajudar.'],
+      ],
+      2: [
+        [e.fornoEtapa === 0, 'Clique no forno de cima. O painel pede a temperatura em °C, e o visor mostra em °F. O papel de conversão e a receita ajudam.'],
+        [e.fornoEtapa === 1 || e.fornoEtapa === 3, 'O merengue ainda está assando. Espere alguns segundos e clique no forno de novo.'],
+        [e.fornoEtapa === 2, 'No estágio 2 o visor não mostra a temperatura. Ela está escrita em algum lugar do cenário. Depois é só converter para °C.'],
+        [e.fornoEtapa === 4, 'O merengue está pronto! Clique no forno para retirá-lo.'],
+        [!e.merengue, 'A porta da Câmara Fria só abre quando o merengue sair do forno.'],
+        [e.merengue && !e.caldaPronta, 'A calda precisa de um termômetro, e ele está na Câmara Fria. Depois selecione o termômetro e clique no frasco de calda.'],
+        [e.merengue && !e.yuzuUsado, 'Quando tiver o yuzu congelado, deixe-o sobre a bancada de mármore para descongelar.'],
+      ],
+      3: [
+        [!e.termostatoAberto, 'O painel do termostato está preso por parafusos. Selecione a chave de fenda no inventário e clique no painel. Atrás dele tem algo que a Confeitaria precisa.'],
+        [!e.caixaAberta, 'O freezer de frutas tem uma trava de balança com 4 dígitos: a massa de dois recipientes. Leia as etiquetas deles e use a fórmula do cartaz.'],
+        [!e.segurancaAberta, 'O teclado de segurança pede a temperatura do freezer em °C. O visor mostra 14 °F, e o cartaz da parede explica como converter.'],
+        [!e.emulsaoPronta, 'O misturador de emulsão não é obrigatório para sair, mas o creme vai ser usado no prato final. Mantenha o indicador na zona verde.'],
+        [!e.caldaPronta || !e.yuzuUsado, 'Volte à Confeitaria: use o termômetro no frasco de calda e deixe o yuzu descongelando no mármore. Só depois a porta do freezer abre.'],
+      ],
+      4: [
+        [!e.chaveMestraPega, 'O quadro de avisos diz onde está a chave mestra.'],
+        [!e.armarioAberto, 'Use a chave mestra no armário de especiarias antes de sair.'],
+      ],
+    };
+    return (dicas[CENA] ?? []).find(([precisa]) => precisa)?.[1]
+      ?? 'Parece que você já tem tudo por aqui. Vá para a porta de saída!';
+  };
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <dialog class="daniela" id="daniela-dlg" aria-labelledby="daniela-nome">
+      <img class="daniela-rato" src="${IMG}" alt="Daniela, uma ratinha de chapéu de chef e avental, segurando uma colher de pau">
+      <div class="daniela-balao">
+        <p class="daniela-nome" id="daniela-nome">Daniela</p>
+        <p class="daniela-fala" id="daniela-fala" aria-live="polite"></p>
+        <div class="daniela-acoes" id="daniela-acoes"></div>
       </div>
-      <a class="btn-pixel" href="cena2.html">← Voltar à Confeitaria</a>
-    `);
-    return;
+    </dialog>
+    <button class="daniela-ajuda" id="daniela-ajuda" type="button" aria-label="Pedir uma dica para a Daniela (custa 1 minuto)">
+      <img src="${IMG}" alt=""><span>DICA</span>
+    </button>
+  `);
+
+  const dlg = $d('#daniela-dlg');
+  let falas = [];
+  let finais = [];
+  let passo = 0;
+  let botoes = [];
+  let aoFechar = null;
+
+  const posicionar = () => {
+    const cena = $d('#cena')?.getBoundingClientRect();
+    const largura = cena ? cena.width * 0.94 : Math.min(720, innerWidth * 0.94);
+    const esquerda = cena ? cena.left + (cena.width - largura) / 2 : (innerWidth - largura) / 2;
+    const base = cena ? innerHeight - cena.bottom + 14 : 24;
+    dlg.style.setProperty('--d-larg', `${largura}px`);
+    dlg.style.setProperty('--d-esq', `${esquerda}px`);
+    dlg.style.setProperty('--d-base', `${base}px`);
+  };
+
+  const mostrar = () => {
+    $d('#daniela-fala').textContent = falas[passo];
+    const ultimo = passo === falas.length - 1;
+    botoes = ultimo ? finais : [{ texto: 'PRÓXIMO ▶', fn: () => { passo++; mostrar(); } }];
+    $d('#daniela-acoes').innerHTML = botoes
+      .map((b, i) => `<button type="button" data-i="${i}">${b.texto}</button>`)
+      .join('');
+    $d('#daniela-acoes button').focus();
+  };
+
+  const dizer = (linhas, opcoes = {}) => {
+    falas = linhas;
+    passo = 0;
+    aoFechar = opcoes.aoFechar ?? null;
+    finais = opcoes.botoes ?? [{ texto: 'ENTENDI!', fn: () => dlg.close() }];
+    posicionar();
+    if (!dlg.open) dlg.showModal();
+    mostrar();
+  };
+
+  $d('#daniela-acoes').addEventListener('click', ({ target }) => {
+    botoes[target.dataset.i]?.fn();
+  });
+
+  dlg.addEventListener('close', () => {
+    const fn = aoFechar;
+    aoFechar = null;
+    fn?.();
+  });
+
+  window.addEventListener('resize', posicionar);
+
+  const CUSTO_DICA = 60;
+
+  const pedirDica = () => {
+    const restante = Math.ceil((estado.fim - Date.now()) / 1000);
+    if (restante <= CUSTO_DICA) {
+      return dizer(['Falta menos de 1 minuto no relógio, então você não tem tempo para pagar uma dica. Corra!']);
+    }
+    dizer(['Atenção! Cada dica custa 1 minuto do seu tempo. Quer mesmo ver a dica?'], {
+      botoes: [
+        {
+          texto: 'PROSSEGUIR',
+          fn: () => {
+            estado.fim -= CUSTO_DICA * 1000;
+            salvar();
+            tick();
+            dizer([dicaAtual()]);
+          },
+        },
+        { texto: 'CANCELAR', fn: () => dlg.close() },
+      ],
+    });
+  };
+
+  $d('#daniela-ajuda').addEventListener('click', pedirDica);
+
+  document.addEventListener('click', (evento) => {
+    const link = evento.target.closest('a.btn-pixel');
+    const destino = link?.getAttribute('href') ?? '';
+    if (!/^cena\d+\.html$/.test(destino)) return;
+    if (Number(destino.match(/\d+/)[0]) <= CENA || jaAvisou.has(destino)) return;
+    const falta = faltas();
+    if (!falta.length) return;
+
+    evento.preventDefault();
+    const lista = falta.map(([nome, onde]) => `${nome} (${onde})`).join('; ');
+    dizer([`Ei, espera! Você ainda não pegou: ${lista}.`], {
+      botoes: [
+        { texto: 'VOU PROCURAR', fn: () => dlg.close() },
+        { texto: 'SAIR MESMO ASSIM', fn: () => { jaAvisou.add(destino); location.href = destino; } },
+      ],
+    });
+  }, true);
+
+  const umaVez = (chave) => {
+    try {
+      if (sessionStorage.getItem(chave)) return false;
+      sessionStorage.setItem(chave, '1');
+    } catch (erro) {}
+    return true;
+  };
+
+  if (CENA === 1 && umaVez('daniela_intro')) {
+    const inicio = Date.now();
+    dizer(INTRO, {
+      botoes: [{ texto: 'VAMOS LÁ!', fn: () => dlg.close() }],
+      aoFechar: () => {
+        estado.fim += Date.now() - inicio;
+        salvar();
+      },
+    });
+  } else if (BOAS_VINDAS[CENA] && umaVez(`daniela_cena${CENA}`)) {
+    dizer(BOAS_VINDAS[CENA]);
   }
-  abrirModal('Escritório do Chef', `
-    <p>A porta do freezer se abre e um corredor leva ao Escritório do Chef Executivo.</p>
-    <a class="btn-pixel" href="cena4.html">Entrar →</a>
-  `);
-}
-
-ligar('#no-poster', 'Cartaz', abrirPoster);
-ligar('#no-pote3a', 'Recipiente', () => abrirRecipiente(3));
-ligar('#no-pote3b', 'Recipiente', () => abrirRecipiente(3));
-ligar('#no-pote11', 'Recipiente', () => abrirRecipiente(11));
-ligar('#no-teclado', 'Teclado', abrirSeguranca);
-ligar('#no-porta', 'Porta', abrirPorta);
-ligar('#no-caixa', 'Freezer', abrirCaixa);
-ligar('#no-misturador', 'Misturador', abrirMisturador);
-ligar('#no-termostato', 'Termostato', abrirTermostato, { chave: usarChaveNoTermostato });
-
-ligar('#no-armario', 'Armário', () => fala('Um armário de inox lacrado pelo gelo. Não abre.'));
-ligar('#no-geladeira-esq', 'Geladeira', () => fala('Uma geladeira industrial cheia de caixas. A porta está congelada e não abre.'));
-ligar('#no-geladeira-meio', 'Geladeira', () => fala('Uma geladeira de vidro com caixas de leite e manteiga. Nada de útil.'));
-ligar('#no-caixas-esq', 'Caixas', () => fala('Caixas de papelão duras de tanto gelo.'));
-ligar('#no-caixas-dir', 'Caixas', () => fala('Caixas congeladas no alto da prateleira. Nada de útil.'));
-ligar('#no-lampada', 'Lâmpada', () => fala('A luz azulada da lâmpada deixa a sala ainda mais fria.'));
-ligar('#no-gelo', 'Gelo', () => fala('Poças de gelo no chão. Melhor andar devagar.'));
-ligar('#no-potes-med', 'Recipientes', () => fala('As etiquetas destes recipientes estão apagadas pelo gelo. Os legíveis estão na prateleira de cima.'));
-ligar('#no-recip-baixo', 'Recipientes', () => fala('Recipientes 011 e 012, com as etiquetas cobertas de gelo. Não dá para ler.'));
-
-function formatar(seg) {
-  const m = String(Math.floor(seg / 60)).padStart(2, '0');
-  const s = String(seg % 60).padStart(2, '0');
-  return m + ':' + s;
-}
-function fimDeJogo() {
-  clearInterval(relogio);
-  travado = true;
-  try { sessionStorage.removeItem(CHAVE_ESTADO); } catch (e) {}
-  abrirModal('FORA DO TEMPO!', `
-    <p>O concurso começou sem você. O Chef abre a porta, furioso, e você está demitido antes de tocar na bancada.</p>
-    <a class="btn-pixel" href="../index.html">Voltar ao menu</a>
-  `);
-}
-function tick() {
-  const restante = Math.max(0, Math.ceil((estado.fim - Date.now()) / 1000));
-  const cron = $('#cronometro');
-  cron.textContent = formatar(restante);
-  cron.classList.toggle('urgente', restante <= 60);
-  if (restante <= 0) fimDeJogo();
-}
-const relogio = setInterval(tick, 1000);
-
-if (estado.caixaAberta) $('#no-caixa').classList.add('aberta');
-if (estado.segurancaAberta) $('#no-teclado').classList.add('aberta');
-renderInventario();
-tick();
-fala('Câmara Fria. Procure o termômetro digital e abra o freezer das frutas raras.');
+})();
